@@ -24,7 +24,32 @@ class FocusTrackerApp(QMainWindow):
     def initUI(self):
         self.setWindowTitle("FocusTrack - Eye Tracking Focus Assistant")
         self.setGeometry(100, 100, 1200, 800)
-        self.setStyleSheet("background-color: white;")
+        self.setStyleSheet("""
+        QMainWindow, QWidget {
+            background-color: #2D2D30;
+            color: #E0E0E0;
+        }
+        QLabel {
+            color: #E0E0E0;
+        }
+        QTabWidget::pane {
+            border: 1px solid #3E3E42;
+            background-color: #2D2D30;
+        }
+        QTabBar::tab {
+            background-color: #3E3E42;
+            color: #E0E0E0;
+            padding: 8px 12px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        }
+        QTabBar::tab:selected {
+            background-color: #007ACC;
+        }
+        QTabBar::tab:hover:!selected {
+            background-color: #505050;
+        }
+        """)
         
         # Create central widget and main layout
         central_widget = QWidget()
@@ -38,7 +63,7 @@ class FocusTrackerApp(QMainWindow):
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(640, 480)
-        self.video_label.setStyleSheet("border: 1px solid #ddd; background-color: black;")
+        self.video_label.setStyleSheet("border: 1px solid #555555; background-color: black;")
         left_layout.addWidget(self.video_label)
         
         # Control buttons

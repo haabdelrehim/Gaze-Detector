@@ -49,7 +49,7 @@ class AdviceWidget(QWidget):
         self.advice_text = QTextEdit()
         self.advice_text.setReadOnly(True)
         self.advice_text.setMinimumHeight(150)
-        self.advice_text.setStyleSheet("background-color: #f8f8f8; border: 1px solid #ddd; border-radius: 5px;")
+        self.advice_text.setStyleSheet("background-color: #333337; border: 1px solid #555555; border-radius: 5px; color: #E0E0E0;")
         
         # Set initial advice
         self.advice_text.setHtml("""

@@ -60,7 +60,7 @@ class FocusMetricsWidget(QWidget):
         # Current session metrics
         metrics_frame = QFrame()
         metrics_frame.setFrameShape(QFrame.StyledPanel)
-        metrics_frame.setStyleSheet("background-color: #f0f0f0; border-radius: 5px;")
+        metrics_frame.setStyleSheet("background-color: #3E3E42; border-radius: 5px; color: #E0E0E0;")
         
         metrics_layout = QVBoxLayout(metrics_frame)
         metrics_layout.setSpacing(10)
@@ -137,7 +137,7 @@ class FocusMetricsWidget(QWidget):
             # Alternative to chart - just a placeholder message
             chart_placeholder = QLabel("Focus trend chart unavailable - PyQtChart module not installed")
             chart_placeholder.setAlignment(Qt.AlignCenter)
-            chart_placeholder.setStyleSheet("background-color: #f0f0f0; padding: 20px; border-radius: 5px;")
+            chart_placeholder.setStyleSheet("background-color: #3E3E42; padding: 20px; border-radius: 5px; color: #E0E0E0;")
             chart_placeholder.setMinimumHeight(100)
             layout.addWidget(chart_placeholder)
         
