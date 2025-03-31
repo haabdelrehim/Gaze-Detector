@@ -202,3 +202,4 @@ class FocusMetricsWidget(QWidget):
         # Adjust X axis range to show only the last 30 minutes of data
         max_minutes = min(30, len(self.chart_data_points) / 12)
         self.axis_x.setRange(0, max_minutes)
+        #  poopy stinky git
