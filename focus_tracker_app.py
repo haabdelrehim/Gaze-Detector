@@ -1,18 +1,34 @@
 import cv2
 from PyQt5.QtWidgets import (QMainWindow, QWidget,
                              QVBoxLayout, QHBoxLayout, 
-                             QLabel, QPushButton, QTabWidget)
+                             QLabel, QPushButton, QTabWidget,
+                             QMessageBox)
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDateTime, QTimer
+from datetime import datetime
 
 from video_thread import VideoThread
 from focus_metrics_widget import FocusMetricsWidget
 from advice_widget import AdviceWidget
+from database_manager import DatabaseManager
+from history_widget import HistoryWidget
 
 class FocusTrackerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         
+        # Initialize database
+        self.db_manager = DatabaseManager()
+        
+        # Initialize session tracking variables
+        self.session_active = False
+        self.session_start_time = None
+        self.session_focus_points = []  # To store focus data points for the current session
+        self.focus_data_snapshots = []  # To store periodic snapshots of focus data
+        self.current_focus_period_start = None  # For tracking continuous focus periods
+        self.longest_focus_period = 0  # Track longest continuous focus period in seconds
+        
+        # Initialize UI
         self.initUI()
         
         # Start video thread
@@ -20,8 +36,14 @@ class FocusTrackerApp(QMainWindow):
         self.video_thread.change_pixmap_signal.connect(self.update_image)
         self.video_thread.focus_data_signal.connect(self.update_focus_data)
         self.video_thread.start()
+        
+        # Session data collection timer - records focus state at regular intervals
+        self.data_collection_timer = QTimer()
+        self.data_collection_timer.timeout.connect(self.collect_session_data)
+        self.data_collection_timer.setInterval(5000)  # Every 5 seconds
     
     def initUI(self):
+        """Initialize the user interface"""
         self.setWindowTitle("FocusTrack - Eye Tracking Focus Assistant")
         self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet("""
@@ -53,11 +75,21 @@ class FocusTrackerApp(QMainWindow):
         
         # Create central widget and main layout
         central_widget = QWidget()
-        main_layout = QHBoxLayout(central_widget)
+        self.main_layout = QHBoxLayout(central_widget)
+        
+        # Create all widgets first before assembling layout
+        # Create the metrics widget
+        self.metrics_widget = FocusMetricsWidget()
+        
+        # Create the advice widget
+        self.advice_widget = AdviceWidget()
+        
+        # Create the history widget
+        self.history_widget = HistoryWidget(self.db_manager)
         
         # Left panel (video feed and controls)
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
+        self.left_panel = QWidget()
+        left_layout = QVBoxLayout(self.left_panel)
         
         # Video display
         self.video_label = QLabel()
@@ -85,6 +117,7 @@ class FocusTrackerApp(QMainWindow):
         
         self.pause_button = QPushButton("Pause")
         self.pause_button.setMinimumHeight(40)
+        self.pause_button.setEnabled(False)
         self.pause_button.setStyleSheet("""
         QPushButton {
             background-color: #f39c12;
@@ -95,10 +128,15 @@ class FocusTrackerApp(QMainWindow):
         QPushButton:hover {
             background-color: #e67e22;
         }
+        QPushButton:disabled {
+            background-color: #7f7f7f;
+            color: #cccccc;
+        }
         """)
         
-        self.reset_button = QPushButton("Reset")
+        self.reset_button = QPushButton("End Session")
         self.reset_button.setMinimumHeight(40)
+        self.reset_button.setEnabled(False)
         self.reset_button.setStyleSheet("""
         QPushButton {
             background-color: #e74c3c;
@@ -109,6 +147,10 @@ class FocusTrackerApp(QMainWindow):
         QPushButton:hover {
             background-color: #c0392b;
         }
+        QPushButton:disabled {
+            background-color: #7f7f7f;
+            color: #cccccc;
+        }
         """)
         
         control_layout.addWidget(self.start_button)
@@ -117,43 +159,34 @@ class FocusTrackerApp(QMainWindow):
         
         left_layout.addLayout(control_layout)
         
-        # Right panel (tabs for metrics and advice)
-        right_panel = QTabWidget()
-        right_panel.setMinimumWidth(400)
+        # Right panel (tabs for metrics, advice, and history)
+        self.right_panel = QTabWidget()
+        self.right_panel.setMinimumWidth(400)
         
-        # Metrics tab
-        self.metrics_widget = FocusMetricsWidget()
-        right_panel.addTab(self.metrics_widget, "Focus Metrics")
+        # Add tabs
+        self.right_panel.addTab(self.metrics_widget, "Focus Metrics")
+        self.right_panel.addTab(self.advice_widget, "Focus Advice")
+        self.right_panel.addTab(self.history_widget, "Session History")
         
-        # Advice tab
-        self.advice_widget = AdviceWidget()
+        # Connect tab change signal
+        self.right_panel.currentChanged.connect(self.on_tab_changed)
         
-        right_panel.addTab(self.advice_widget, "Focus Advice")
-        
-        # Connect the generate advice button
-        self.advice_widget.generate_button.clicked.connect(lambda: self.debug_and_generate())
+        # Connect advice button
+        self.advice_widget.generate_button.clicked.connect(self.generate_advice)
         
         # Add panels to main layout
-        main_layout.addWidget(left_panel, 2)
-        main_layout.addWidget(right_panel, 1)
+        self.main_layout.addWidget(self.left_panel, 2)
+        self.main_layout.addWidget(self.right_panel, 1)
         
         self.setCentralWidget(central_widget)
         
         # Connect button signals
         self.start_button.clicked.connect(self.start_session)
         self.pause_button.clicked.connect(self.pause_session)
-        self.reset_button.clicked.connect(self.reset_session)
+        self.reset_button.clicked.connect(self.end_session)
         
         # Focus data
         self.focus_data = {}
-    
-    def debug_and_generate(self):
-        print("Generate button clicked!")
-        if hasattr(self.advice_widget, 'model_loading') and self.advice_widget.model_loading:
-            print("Model is still loading. Cannot generate advice yet.")
-            return
-        self.advice_widget.generate_gemini_advice()
-    
     
     def update_image(self, cv_img):
         """Updates the image_label with a new OpenCV image"""
@@ -171,43 +204,229 @@ class FocusTrackerApp(QMainWindow):
     
     def update_focus_data(self, focus_data):
         """Update the focus data and metrics"""
-        print("Main app received focus data update")
         self.focus_data = focus_data
         self.metrics_widget.update_metrics(focus_data)
         
         # Only update advice occasionally to avoid overwhelming the user
         if focus_data["distraction_count"] % 5 == 0 and focus_data["distraction_count"] > 0:
             self.advice_widget.update_advice(focus_data)
+        
+        # Track focus periods for session history
+        if self.session_active:
+            # If current state is focused and we're just starting a focus period
+            if focus_data["focused"] and self.current_focus_period_start is None:
+                self.current_focus_period_start = QDateTime.currentDateTime()
+            
+            # If current state is unfocused and we were in a focus period
+            elif not focus_data["focused"] and self.current_focus_period_start is not None:
+                # Calculate focus period duration
+                focus_period = self.current_focus_period_start.secsTo(QDateTime.currentDateTime())
+                
+                # Check if this is the longest focus period
+                if focus_period > self.longest_focus_period:
+                    self.longest_focus_period = focus_period
+                
+                # Reset current focus period
+                self.current_focus_period_start = None
     
+    def collect_session_data(self):
+        """Collect data points for the current session"""
+        if not self.session_active:
+            return
+        
+        # Create a timestamp for this data point
+        current_time = datetime.now()
+        
+        # Store focus state with timestamp
+        self.session_focus_points.append({
+            'timestamp': current_time,
+            'is_focused': self.focus_data["focused"],
+            'gaze_direction': self.focus_data["direction"]
+        })
+        
+        # Store a snapshot of all focus metrics periodically
+        self.focus_data_snapshots.append({
+            'timestamp': current_time,
+            'focus_duration': self.focus_data["focus_duration"],
+            'distraction_count': self.focus_data["distraction_count"],
+            'avg_distraction_time': self.focus_data["avg_distraction_time"],
+            'is_focused': self.focus_data["focused"],
+            'direction': self.focus_data["direction"]
+        })
+    def on_tab_changed(self, index):
+        """Handle tab changes to optimize layout"""
+        tab_name = self.right_panel.tabText(index)
+        
+        if tab_name == "Session History":
+            # Store original size before modifying
+            self.original_window_width = self.width()
+            self.original_window_height = self.height()
+            
+            # Hide the left panel (video feed) and expand history
+            self.left_panel.setVisible(False)
+            
+            # Don't set minimum width here - that's causing the expansion
+            # Instead, let it take up the space naturally when left panel is hidden
+        else:
+            # Show the left panel
+            self.left_panel.setVisible(True)
+            
+            # If coming from history tab, restore original size
+            if hasattr(self, 'original_window_width'):
+                self.resize(self.original_window_width, self.original_window_height)
+        
+        # Force layout update
+        self.adjustSize()
     def start_session(self):
         """Start or resume the focus tracking session"""
-        self.video_thread.start_tracking()
-        self.start_button.setEnabled(False)
-        self.pause_button.setEnabled(True)
-        self.reset_button.setEnabled(True)
+        if not self.session_active:
+            # Starting a new session
+            self.session_active = True
+            self.session_start_time = QDateTime.currentDateTime()
+            self.session_focus_points = []
+            self.focus_data_snapshots = []
+            self.longest_focus_period = 0
+            self.current_focus_period_start = None
+            
+            # Start focus tracking
+            self.video_thread.start_tracking()
+            
+            # Start data collection timer
+            self.data_collection_timer.start()
+            
+            # Update UI
+            self.start_button.setText("Resume")
+            self.start_button.setEnabled(False)
+            self.pause_button.setEnabled(True)
+            self.reset_button.setEnabled(True)
+        else:
+            # Resuming a paused session
+            self.video_thread.resume()
+            self.data_collection_timer.start()
+            
+            # If we were focused when paused, restart the focus period timer
+            if self.focus_data["focused"]:
+                self.current_focus_period_start = QDateTime.currentDateTime()
+            
+            # Update UI
+            self.start_button.setEnabled(False)
+            self.pause_button.setEnabled(True)
     
     def pause_session(self):
         """Pause the focus tracking session"""
-        self.video_thread.pause_tracking()
-        self.start_button.setEnabled(True)
-        self.start_button.setText("Resume Session")
-        self.pause_button.setEnabled(False)
+        if self.session_active:
+            # Pause focus tracking
+            self.video_thread.pause_tracking()
+            
+            # Pause data collection timer
+            self.data_collection_timer.stop()
+            
+            # If we're in a focus period, end it since we're pausing
+            if self.current_focus_period_start is not None:
+                focus_period = self.current_focus_period_start.secsTo(QDateTime.currentDateTime())
+                if focus_period > self.longest_focus_period:
+                    self.longest_focus_period = focus_period
+                self.current_focus_period_start = None
+            
+            # Update UI
+            self.start_button.setEnabled(True)
+            self.pause_button.setEnabled(False)
     
-    def reset_session(self):
-        """Reset all session data"""
-        self.video_thread.reset()
-        self.start_button.setEnabled(True)
-        self.start_button.setText("Start Session")
-        self.pause_button.setEnabled(False)
+    def end_session(self):
+        """End the current session and save to database"""
+        if not self.session_active:
+            return
+        
+        # Stop tracking and data collection
+        self.video_thread.pause_tracking()
+        self.data_collection_timer.stop()
+        
+        # Calculate session metrics
+        end_time = QDateTime.currentDateTime()
+        session_duration = self.session_start_time.secsTo(end_time)
+        
+        # If we're still in a focus period, include it in longest period calculation
+        if self.current_focus_period_start is not None:
+            focus_period = self.current_focus_period_start.secsTo(end_time)
+            if focus_period > self.longest_focus_period:
+                self.longest_focus_period = focus_period
+        
+        # Calculate focus percentage (time focused / total time)
+        focus_time = self.focus_data["focus_duration"]
+        focus_percentage = (focus_time / session_duration * 100) if session_duration > 0 else 0
+        
+        
+        # Prepare session data for database
+        session_data = {
+            'start_time': self.session_start_time.toPyDateTime(),
+            'end_time': end_time.toPyDateTime(),
+            'duration': session_duration,
+            'distraction_count': self.focus_data["distraction_count"],
+            'avg_distraction_time': self.focus_data["avg_distraction_time"],
+            'focus_percentage': focus_percentage,
+            'longest_focus_period': self.longest_focus_period,
+            'focus_data': self.focus_data_snapshots,
+            'focus_points': self.session_focus_points
+        }
+       
+                
+        # Save to database
+        session_id = self.db_manager.save_session(session_data)
+        
+        if session_id:
+            QMessageBox.information(
+                self, 
+                "Session Completed", 
+                f"Session completed and saved to history.\n\nDuration: {session_duration // 60} minutes, {session_duration % 60} seconds\nFocus percentage: {focus_percentage:.1f}%"
+            )
+            
+            # Reset session state
+            self.session_active = False
+            self.video_thread.reset()
+            
+            # Reset UI
+            self.start_button.setText("Start Session")
+            self.start_button.setEnabled(True)
+            self.pause_button.setEnabled(False)
+            self.reset_button.setEnabled(False)
+            
+            # Refresh history tab
+            self.history_widget.refresh_sessions()
+        else:
+            QMessageBox.warning(
+                self, 
+                "Error Saving Session", 
+                "There was an error saving the session to history."
+            )
     
     def generate_advice(self):
         """Generate focus advice based on current metrics"""
         if self.focus_data:
-            self.advice_widget.update_advice(self.focus_data)
+            self.advice_widget.generate_gemini_advice()
     
     def closeEvent(self, event):
-        """Clean up resources when closing the application"""
+        """Handle application close event"""
+        # If a session is active, ask to save it
+        if self.session_active:
+            reply = QMessageBox.question(
+                self, 
+                "End Session", 
+                "A session is still in progress. Would you like to save it before exiting?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.end_session()
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
+        
+        # Clean up resources
         self.video_thread.stop()
         if hasattr(self.advice_widget, 'api_thread'):
             self.advice_widget.api_thread.stop()
+        
+        # Close database connection
+        self.db_manager.close()
+        
         event.accept()
