@@ -50,6 +50,8 @@ class DatabaseManager:
         except sqlite3.Error as e:
             print(f"Database initialization error: {e}")
     
+    # Replace the save_session method in database_manager.py with this improved version
+
     def save_session(self, session_data):
         """
         Save a completed session to the database
@@ -65,45 +67,112 @@ class DatabaseManager:
             start_time = session_data['start_time'].isoformat()
             end_time = session_data['end_time'].isoformat()
             
-            # Convert focus_data to JSON string
-            focus_data_json = json.dumps(session_data['focus_data'])
+            # Convert focus_data to JSON string - handle potential serialization issues
+            try:
+                import json
+                focus_data_json = json.dumps(session_data['focus_data'])
+                print(f"Successfully serialized focus_data: {len(focus_data_json)} characters")
+            except Exception as e:
+                print(f"Error serializing focus_data: {e}")
+                # Create a simplified version of focus_data
+                simplified_data = []
+                for item in session_data['focus_data']:
+                    # Convert non-serializable objects to strings
+                    simplified_item = {}
+                    for k, v in item.items():
+                        if k == 'timestamp':
+                            simplified_item[k] = v.isoformat()
+                        else:
+                            simplified_item[k] = v
+                    simplified_data.append(simplified_item)
+                focus_data_json = json.dumps(simplified_data)
+                print(f"Used simplified focus_data: {len(focus_data_json)} characters")
             
-            # Insert into sessions table
-            self.cursor.execute('''
+            # Print values for debugging
+            print(f"Saving session with values:")
+            print(f"  start_time: {start_time}")
+            print(f"  end_time: {end_time}")
+            print(f"  duration: {session_data['duration']}")
+            print(f"  distraction_count: {session_data['distraction_count']}")
+            print(f"  avg_distraction_time: {session_data['avg_distraction_time']}")
+            print(f"  focus_percentage: {session_data['focus_percentage']}")
+            print(f"  longest_focus_period: {session_data['longest_focus_period']}")
+            
+            # Insert into sessions table with parameter binding
+            sql = '''
             INSERT INTO sessions (
                 start_time, end_time, duration, distraction_count, 
                 avg_distraction_time, focus_percentage, longest_focus_period, focus_data
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                start_time, end_time, session_data['duration'],
-                session_data['distraction_count'], session_data['avg_distraction_time'],
-                session_data['focus_percentage'], session_data['longest_focus_period'],
+            '''
+            
+            params = (
+                start_time, end_time, 
+                int(session_data['duration']),
+                int(session_data['distraction_count']), 
+                float(session_data['avg_distraction_time']),
+                float(session_data['focus_percentage']), 
+                int(session_data['longest_focus_period']),
                 focus_data_json
-            ))
+            )
+            
+            # Print parameter sizes for debugging
+            print(f"Parameter sizes:")
+            print(f"  start_time: {len(start_time)} chars")
+            print(f"  end_time: {len(end_time)} chars") 
+            print(f"  focus_data_json: {len(focus_data_json)} chars")
+            
+            # Execute the SQL with parameters
+            self.cursor.execute(sql, params)
             
             # Get the ID of the inserted session
             session_id = self.cursor.lastrowid
+            print(f"Inserted session with ID: {session_id}")
             
-            # Insert focus points
-            for point in session_data['focus_points']:
-                timestamp = point['timestamp'].isoformat()
-                is_focused = 1 if point['is_focused'] else 0
+            # Insert focus points - do this in smaller batches to avoid transaction issues
+            focus_points = session_data['focus_points']
+            print(f"Inserting {len(focus_points)} focus points")
+            
+            BATCH_SIZE = 50
+            total_points = len(focus_points)
+            
+            for i in range(0, total_points, BATCH_SIZE):
+                batch = focus_points[i:i+BATCH_SIZE]
+                print(f"Processing batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}: {len(batch)} points")
                 
-                self.cursor.execute('''
-                INSERT INTO focus_points (
-                    session_id, timestamp, is_focused, gaze_direction
-                ) VALUES (?, ?, ?, ?)
-                ''', (
-                    session_id, timestamp, is_focused, point['gaze_direction']
-                ))
+                for point in batch:
+                    timestamp = point['timestamp'].isoformat()
+                    is_focused = 1 if point['is_focused'] else 0
+                    
+                    try:
+                        self.cursor.execute('''
+                        INSERT INTO focus_points (
+                            session_id, timestamp, is_focused, gaze_direction
+                        ) VALUES (?, ?, ?, ?)
+                        ''', (
+                            session_id, timestamp, is_focused, point['gaze_direction']
+                        ))
+                    except Exception as e:
+                        print(f"Error inserting focus point: {e}")
+                        print(f"Point data: timestamp={timestamp}, is_focused={is_focused}, direction={point['gaze_direction']}")
+                
+                # Commit each batch to avoid large transactions
+                self.conn.commit()
+                print(f"Committed batch {i//BATCH_SIZE + 1}")
             
+            # Final commit
             self.conn.commit()
-            print(f"Session saved with ID: {session_id}")
+            print(f"Session saved successfully with ID: {session_id}")
             return session_id
         
-        except sqlite3.Error as e:
+        except Exception as e:
+            import traceback
             print(f"Error saving session: {e}")
-            self.conn.rollback()
+            traceback.print_exc()
+            try:
+                self.conn.rollback()
+            except:
+                pass
             return None
     
     def get_all_sessions(self):

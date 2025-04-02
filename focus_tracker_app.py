@@ -355,6 +355,32 @@ class FocusTrackerApp(QMainWindow):
         focus_time = self.focus_data["focus_duration"]
         focus_percentage = (focus_time / session_duration * 100) if session_duration > 0 else 0
         
+        print(f"\n========== SESSION DATA SUMMARY ==========")
+        print(f"Session duration: {session_duration} seconds")
+        print(f"Number of focus points: {len(self.session_focus_points)}")
+        print(f"Number of focus snapshots: {len(self.focus_data_snapshots)}")
+        print(f"Distraction count: {self.focus_data['distraction_count']}")
+
+        # If the session data is very large, limit it to prevent database issues
+        MAX_FOCUS_POINTS = 500
+        if len(self.session_focus_points) > MAX_FOCUS_POINTS:
+            print(f"Limiting focus points from {len(self.session_focus_points)} to {MAX_FOCUS_POINTS}")
+            # Keep first, middle, and last points for a representative sample
+            first_third = self.session_focus_points[:MAX_FOCUS_POINTS//3]
+            middle_third = self.session_focus_points[len(self.session_focus_points)//2 - MAX_FOCUS_POINTS//6:
+                                                    len(self.session_focus_points)//2 + MAX_FOCUS_POINTS//6]
+            last_third = self.session_focus_points[-MAX_FOCUS_POINTS//3:]
+            self.session_focus_points = first_third + middle_third + last_third
+
+        MAX_SNAPSHOTS = 100
+        if len(self.focus_data_snapshots) > MAX_SNAPSHOTS:
+            print(f"Limiting focus snapshots from {len(self.focus_data_snapshots)} to {MAX_SNAPSHOTS}")
+            # Same approach - keep beginning, middle, and end
+            first_third = self.focus_data_snapshots[:MAX_SNAPSHOTS//3]
+            middle_third = self.focus_data_snapshots[len(self.focus_data_snapshots)//2 - MAX_SNAPSHOTS//6:
+                                                    len(self.focus_data_snapshots)//2 + MAX_SNAPSHOTS//6]
+            last_third = self.focus_data_snapshots[-MAX_SNAPSHOTS//3:]
+            self.focus_data_snapshots = first_third + middle_third + last_third
         
         # Prepare session data for database
         session_data = {
@@ -368,6 +394,46 @@ class FocusTrackerApp(QMainWindow):
             'focus_data': self.focus_data_snapshots,
             'focus_points': self.session_focus_points
         }
+        try:
+            print("Attempting to save session to database...")
+            session_id = self.db_manager.save_session(session_data)
+            
+            if session_id:
+                print(f"Successfully saved session with ID: {session_id}")
+                QMessageBox.information(
+                    self, 
+                    "Session Completed", 
+                    f"Session completed and saved to history.\n\nDuration: {session_duration // 60} minutes, {session_duration % 60} seconds\nFocus percentage: {focus_percentage:.1f}%"
+                )
+                
+                # Reset session state
+                self.session_active = False
+                self.video_thread.reset()
+                
+                # Reset UI
+                self.start_button.setText("Start Session")
+                self.start_button.setEnabled(True)
+                self.pause_button.setEnabled(False)
+                self.reset_button.setEnabled(False)
+                
+                # Refresh history tab
+                self.history_widget.refresh_sessions()
+            else:
+                print("Failed to save session - session_id is None")
+                QMessageBox.warning(
+                    self, 
+                    "Error Saving Session", 
+                    "There was an error saving the session to history. Check console for details."
+                )
+        except Exception as e:
+            import traceback
+            print(f"Exception during session saving: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(
+                self, 
+                "Error Saving Session", 
+                f"An exception occurred: {str(e)}\nSee console for details."
+            )
        
                 
         # Save to database
