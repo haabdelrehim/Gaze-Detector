@@ -13,6 +13,7 @@ from advice_widget import AdviceWidget
 from database_manager import DatabaseManager
 from history_widget import HistoryWidget
 
+
 class FocusTrackerApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -180,13 +181,57 @@ class FocusTrackerApp(QMainWindow):
         
         self.setCentralWidget(central_widget)
         
-        # Connect button signals
+        # Connect tab change signal
+        self.right_panel.currentChanged.connect(self.on_tab_changed)
+
+        # Connect advice button
+        self.advice_widget.generate_button.clicked.connect(self.generate_advice)
+
+        # Add panels to main layout
+        self.main_layout.addWidget(self.left_panel, 2)
+        self.main_layout.addWidget(self.right_panel, 1)
+        self.setCentralWidget(central_widget)
+
+        # First ensure there are no existing connections
+        print("Checking existing button connections")
+        try:
+            self.start_button.clicked.disconnect()
+            print("Disconnected existing start button connections")
+        except TypeError:
+            print("No existing start button connections to disconnect")
+
+        try:
+            self.pause_button.clicked.disconnect()
+            print("Disconnected existing pause button connections")
+        except TypeError:
+            print("No existing pause button connections to disconnect")
+
+        try:
+            self.reset_button.clicked.disconnect()
+            print("Disconnected existing reset button connections")
+        except TypeError:
+            print("No existing reset button connections to disconnect")
+
+        # Now connect all buttons
+        print("Connecting buttons to their handlers")
         self.start_button.clicked.connect(self.start_session)
         self.pause_button.clicked.connect(self.pause_session)
         self.reset_button.clicked.connect(self.end_session)
+
+        # Verify connections
+        print(f"Start button has {self.start_button.receivers(self.start_button.clicked)} connections")
+        print(f"Pause button has {self.pause_button.receivers(self.pause_button.clicked)} connections")
+        print(f"Reset button has {self.reset_button.receivers(self.reset_button.clicked)} connections")
+
+        # Debug output to check for multiple connections
+        print(f"Button connections established:")
+        print(f"  - Start button has {self.start_button.receivers(self.start_button.clicked)} connections")
+        print(f"  - Pause button has {self.pause_button.receivers(self.pause_button.clicked)} connections")
+        print(f"  - End button has {self.reset_button.receivers(self.reset_button.clicked)} connections")
         
         # Focus data
         self.focus_data = {}
+    
     
     def update_image(self, cv_img):
         """Updates the image_label with a new OpenCV image"""
@@ -331,70 +376,88 @@ class FocusTrackerApp(QMainWindow):
             # Update UI
             self.start_button.setEnabled(True)
             self.pause_button.setEnabled(False)
+
     
     def end_session(self):
         """End the current session and save to database"""
+        # Print call stack to see what's calling this method
+        import traceback
+        print("\n========== END SESSION CALL STACK ==========")
+        traceback.print_stack()
+        print("============================================\n")
+        
         if not self.session_active:
+            print("Session not active, returning early")
             return
-        
-        # Stop tracking and data collection
-        self.video_thread.pause_tracking()
-        self.data_collection_timer.stop()
-        
-        # Calculate session metrics
-        end_time = QDateTime.currentDateTime()
-        session_duration = self.session_start_time.secsTo(end_time)
-        
-        # If we're still in a focus period, include it in longest period calculation
-        if self.current_focus_period_start is not None:
-            focus_period = self.current_focus_period_start.secsTo(end_time)
-            if focus_period > self.longest_focus_period:
-                self.longest_focus_period = focus_period
-        
-        # Calculate focus percentage (time focused / total time)
-        focus_time = self.focus_data["focus_duration"]
-        focus_percentage = (focus_time / session_duration * 100) if session_duration > 0 else 0
-        
-        print(f"\n========== SESSION DATA SUMMARY ==========")
-        print(f"Session duration: {session_duration} seconds")
-        print(f"Number of focus points: {len(self.session_focus_points)}")
-        print(f"Number of focus snapshots: {len(self.focus_data_snapshots)}")
-        print(f"Distraction count: {self.focus_data['distraction_count']}")
+            
+        # Add a flag to prevent duplicate session saving
+        if hasattr(self, '_saving_in_progress') and self._saving_in_progress:
+            print("Session save already in progress, ignoring duplicate call")
+            return
+            
+        print("Starting session saving process")
+        self._saving_in_progress = True
 
-        # If the session data is very large, limit it to prevent database issues
-        MAX_FOCUS_POINTS = 500
-        if len(self.session_focus_points) > MAX_FOCUS_POINTS:
-            print(f"Limiting focus points from {len(self.session_focus_points)} to {MAX_FOCUS_POINTS}")
-            # Keep first, middle, and last points for a representative sample
-            first_third = self.session_focus_points[:MAX_FOCUS_POINTS//3]
-            middle_third = self.session_focus_points[len(self.session_focus_points)//2 - MAX_FOCUS_POINTS//6:
-                                                    len(self.session_focus_points)//2 + MAX_FOCUS_POINTS//6]
-            last_third = self.session_focus_points[-MAX_FOCUS_POINTS//3:]
-            self.session_focus_points = first_third + middle_third + last_third
-
-        MAX_SNAPSHOTS = 100
-        if len(self.focus_data_snapshots) > MAX_SNAPSHOTS:
-            print(f"Limiting focus snapshots from {len(self.focus_data_snapshots)} to {MAX_SNAPSHOTS}")
-            # Same approach - keep beginning, middle, and end
-            first_third = self.focus_data_snapshots[:MAX_SNAPSHOTS//3]
-            middle_third = self.focus_data_snapshots[len(self.focus_data_snapshots)//2 - MAX_SNAPSHOTS//6:
-                                                    len(self.focus_data_snapshots)//2 + MAX_SNAPSHOTS//6]
-            last_third = self.focus_data_snapshots[-MAX_SNAPSHOTS//3:]
-            self.focus_data_snapshots = first_third + middle_third + last_third
-        
-        # Prepare session data for database
-        session_data = {
-            'start_time': self.session_start_time.toPyDateTime(),
-            'end_time': end_time.toPyDateTime(),
-            'duration': session_duration,
-            'distraction_count': self.focus_data["distraction_count"],
-            'avg_distraction_time': self.focus_data["avg_distraction_time"],
-            'focus_percentage': focus_percentage,
-            'longest_focus_period': self.longest_focus_period,
-            'focus_data': self.focus_data_snapshots,
-            'focus_points': self.session_focus_points
-        }
         try:
+            # Stop tracking and data collection
+            self.video_thread.pause_tracking()
+            self.data_collection_timer.stop()
+            
+            # Calculate session metrics
+            end_time = QDateTime.currentDateTime()
+            session_duration = self.session_start_time.secsTo(end_time)
+            
+            # If we're still in a focus period, include it in longest period calculation
+            if self.current_focus_period_start is not None:
+                focus_period = self.current_focus_period_start.secsTo(end_time)
+                if focus_period > self.longest_focus_period:
+                    self.longest_focus_period = focus_period
+            
+            # Calculate focus percentage (time focused / total time)
+            focus_time = self.focus_data["focus_duration"]
+            focus_percentage = (focus_time / session_duration * 100) if session_duration > 0 else 0
+            
+            print(f"\n========== SESSION DATA SUMMARY ==========")
+            print(f"Session duration: {session_duration} seconds")
+            print(f"Number of focus points: {len(self.session_focus_points)}")
+            print(f"Number of focus snapshots: {len(self.focus_data_snapshots)}")
+            print(f"Distraction count: {self.focus_data['distraction_count']}")
+
+            # If the session data is very large, limit it to prevent database issues
+            MAX_FOCUS_POINTS = 500
+            if len(self.session_focus_points) > MAX_FOCUS_POINTS:
+                print(f"Limiting focus points from {len(self.session_focus_points)} to {MAX_FOCUS_POINTS}")
+                # Keep first, middle, and last points for a representative sample
+                first_third = self.session_focus_points[:MAX_FOCUS_POINTS//3]
+                middle_third = self.session_focus_points[len(self.session_focus_points)//2 - MAX_FOCUS_POINTS//6:
+                                                        len(self.session_focus_points)//2 + MAX_FOCUS_POINTS//6]
+                last_third = self.session_focus_points[-MAX_FOCUS_POINTS//3:]
+                self.session_focus_points = first_third + middle_third + last_third
+
+            MAX_SNAPSHOTS = 100
+            if len(self.focus_data_snapshots) > MAX_SNAPSHOTS:
+                print(f"Limiting focus snapshots from {len(self.focus_data_snapshots)} to {MAX_SNAPSHOTS}")
+                # Same approach - keep beginning, middle, and end
+                first_third = self.focus_data_snapshots[:MAX_SNAPSHOTS//3]
+                middle_third = self.focus_data_snapshots[len(self.focus_data_snapshots)//2 - MAX_SNAPSHOTS//6:
+                                                        len(self.focus_data_snapshots)//2 + MAX_SNAPSHOTS//6]
+                last_third = self.focus_data_snapshots[-MAX_SNAPSHOTS//3:]
+                self.focus_data_snapshots = first_third + middle_third + last_third
+            
+            # Prepare session data for database
+            session_data = {
+                'start_time': self.session_start_time.toPyDateTime(),
+                'end_time': end_time.toPyDateTime(),
+                'duration': session_duration,
+                'distraction_count': self.focus_data["distraction_count"],
+                'avg_distraction_time': self.focus_data["avg_distraction_time"],
+                'focus_percentage': focus_percentage,
+                'longest_focus_period': self.longest_focus_period,
+                'focus_data': self.focus_data_snapshots,
+                'focus_points': self.session_focus_points
+            }
+            
+            # Save session to database
             print("Attempting to save session to database...")
             session_id = self.db_manager.save_session(session_data)
             
@@ -434,46 +497,27 @@ class FocusTrackerApp(QMainWindow):
                 "Error Saving Session", 
                 f"An exception occurred: {str(e)}\nSee console for details."
             )
-       
-                
-        # Save to database
-        session_id = self.db_manager.save_session(session_data)
-        
-        if session_id:
-            QMessageBox.information(
-                self, 
-                "Session Completed", 
-                f"Session completed and saved to history.\n\nDuration: {session_duration // 60} minutes, {session_duration % 60} seconds\nFocus percentage: {focus_percentage:.1f}%"
-            )
-            
-            # Reset session state
-            self.session_active = False
-            self.video_thread.reset()
-            
-            # Reset UI
-            self.start_button.setText("Start Session")
-            self.start_button.setEnabled(True)
-            self.pause_button.setEnabled(False)
-            self.reset_button.setEnabled(False)
-            
-            # Refresh history tab
-            self.history_widget.refresh_sessions()
-        else:
-            QMessageBox.warning(
-                self, 
-                "Error Saving Session", 
-                "There was an error saving the session to history."
-            )
+            print("<<< EXITING: end_session (normal completion)")
+        except Exception as e:
+            print("<<< EXITING: end_session (with exception)")
+            raise
+        finally:
+            # Reset the flag when done, regardless of success or failure
+            print("Session saving process completed, resetting flag")
+            self._saving_in_progress = False
     
     def generate_advice(self):
         """Generate focus advice based on current metrics"""
         if self.focus_data:
             self.advice_widget.generate_gemini_advice()
-    
+
     def closeEvent(self, event):
         """Handle application close event"""
+        print(">>> ENTERING: closeEvent")
+        
         # If a session is active, ask to save it
         if self.session_active:
+            print("Session active during closeEvent")
             reply = QMessageBox.question(
                 self, 
                 "End Session", 
@@ -482,12 +526,16 @@ class FocusTrackerApp(QMainWindow):
             )
             
             if reply == QMessageBox.Yes:
+                print("User chose to save session before exit")
                 self.end_session()
             elif reply == QMessageBox.Cancel:
+                print("User cancelled application close")
                 event.ignore()
+                print("<<< EXITING: closeEvent (cancelled)")
                 return
         
         # Clean up resources
+        print("Cleaning up resources")
         self.video_thread.stop()
         if hasattr(self.advice_widget, 'api_thread'):
             self.advice_widget.api_thread.stop()
@@ -495,4 +543,5 @@ class FocusTrackerApp(QMainWindow):
         # Close database connection
         self.db_manager.close()
         
+        print("<<< EXITING: closeEvent (completed)")
         event.accept()

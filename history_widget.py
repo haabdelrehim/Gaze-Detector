@@ -278,19 +278,28 @@ class HistoryWidget(QWidget):
         if self.has_charts and 'focus_points' in session and session['focus_points']:
             self.update_chart(session)
     
+    # Replace the update_chart method in history_widget.py with this improved version:
+
     def update_chart(self, session):
         """Update the focus timeline chart with session data"""
-        # Clear existing chart
+        # Completely clear the existing chart
         self.chart.removeAllSeries()
         
-        # Create focus series
+        # Detach any existing axes
+        for axis in self.chart.axes():
+            self.chart.removeAxis(axis)
+        
+        # Create a fresh focus series
         focus_series = QLineSeries()
         focus_series.setName("Focus")
         
         # Add data points from focus points
         start_time = session['start_time']
         
-        for point in session['focus_points']:
+        # Make sure points are sorted by timestamp
+        sorted_points = sorted(session['focus_points'], key=lambda x: x['timestamp'])
+        
+        for point in sorted_points:
             # Convert time to seconds from start
             time_delta = (point['timestamp'] - start_time).total_seconds()
             # Use 1 for focused, 0 for unfocused
@@ -300,10 +309,10 @@ class HistoryWidget(QWidget):
         # Add series to chart
         self.chart.addSeries(focus_series)
         
-        # Set up axes
+        # Set up new axes
         axis_x = QValueAxis()
         axis_x.setRange(0, session['duration'])
-        axis_x.setTickCount(10)
+        axis_x.setTickCount(min(10, max(2, session['duration'] // 30)))  # Adaptive tick count
         axis_x.setTitleText("Time (seconds)")
         
         axis_y = QValueAxis()
@@ -317,3 +326,6 @@ class HistoryWidget(QWidget):
         
         focus_series.attachAxis(axis_x)
         focus_series.attachAxis(axis_y)
+        
+        # Update chart title
+        self.chart.setTitle(f"Focus Timeline - {session['start_time'].strftime('%Y-%m-%d %H:%M')}")
