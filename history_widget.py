@@ -125,7 +125,7 @@ class HistoryWidget(QWidget):
             # Create chart view
             self.chart_view = QChartView(self.chart)
             self.chart_view.setRenderHint(QPainter.Antialiasing)
-            self.chart_view.setMinimumHeight(200)
+            self.chart_view.setMinimumHeight(300)
             
             chart_layout.addWidget(self.chart_view)
         else:
@@ -144,7 +144,7 @@ class HistoryWidget(QWidget):
         # Add widgets to splitter and set initial sizes
         splitter.addWidget(self.sessions_table)
         splitter.addWidget(details_widget)
-        splitter.setSizes([200, 300])
+        splitter.setSizes([180, 320])
         
         main_layout.addWidget(splitter)
         
@@ -316,8 +316,8 @@ class HistoryWidget(QWidget):
         axis_x.setTitleText("Time (seconds)")
         
         axis_y = QValueAxis()
-        axis_y.setRange(0, 1)
-        axis_y.setTickCount(2)
+        axis_y.setRange(-0.1, 1.1)  # Add a little padding above and below
+        axis_y.setTickCount(3)  # Add one more tick for better visualization
         axis_y.setLabelFormat("%d")
         axis_y.setTitleText("Focus State")
         

@@ -10,6 +10,7 @@ try:
 except ImportError:
     HAS_CHARTS = False
     print("QtChart module not available. Charts will be disabled.")
+from PyQt5.QtCore import Qt, QTimer, QMargins
 
 class FocusMetricsWidget(QWidget):
     def __init__(self, parent=None):
@@ -21,8 +22,9 @@ class FocusMetricsWidget(QWidget):
         if self.has_charts:
             # Initialize chart data
             self.focus_series = QLineSeries()
-            self.focus_series.setName("Focus Time")
+            self.focus_series.setName("Focus State")
             self.chart_data_points = []
+            self.time_points = []  # Add this to track time values
         
         self.initUI()
         
@@ -100,7 +102,6 @@ class FocusMetricsWidget(QWidget):
         avg_distraction_layout.addStretch()
         metrics_layout.addLayout(avg_distraction_layout)
         
-        # Focus trend chart
         if self.has_charts:
             chart_layout = QVBoxLayout()
             chart_title = QLabel("Focus Trend")
@@ -108,18 +109,19 @@ class FocusMetricsWidget(QWidget):
             chart_layout.addWidget(chart_title)
             
             self.chart = QChart()
-            self.chart.setTitle("Focus Time (last 30 minutes)")
+            self.chart.setTitle("Real-time Focus State")
             self.chart.addSeries(self.focus_series)
             
             self.axis_x = QValueAxis()
             self.axis_x.setRange(0, 30)
             self.axis_x.setLabelFormat("%d")
-            self.axis_x.setTitleText("Time (minutes)")
+            self.axis_x.setTitleText("Time (seconds)")
             
             self.axis_y = QValueAxis()
-            self.axis_y.setRange(0, 100)
-            self.axis_y.setLabelFormat("%d")
-            self.axis_y.setTitleText("Focus (%)")
+            self.axis_y.setRange(-0.1, 1.1)  # Range with padding
+            self.axis_y.setTickCount(3)  # Show 0, 0.5, 1
+            self.axis_y.setLabelFormat("%.1f")
+            self.axis_y.setTitleText("Focus State")
             
             self.chart.addAxis(self.axis_x, Qt.AlignBottom)
             self.chart.addAxis(self.axis_y, Qt.AlignLeft)
@@ -148,6 +150,9 @@ class FocusMetricsWidget(QWidget):
         self.setLayout(layout)
     
     def update_metrics(self, focus_data):
+        # Store the focus data for the chart
+        self.focus_data = focus_data
+        
         # Update focus status indicator
         is_focused = focus_data["focused"]
         status_color = "green" if is_focused else "red"
@@ -170,36 +175,39 @@ class FocusMetricsWidget(QWidget):
         self.avg_distraction_time = focus_data["avg_distraction_time"]
         self.avg_distraction_value.setText(f"{self.avg_distraction_time:.1f}s")
         
-        # Store data for chart update
+        # Store focus time and update chart
         self.focus_time = focus_seconds
+        self.update_chart()
     
     def update_chart(self):
         # Only update chart if we have charts enabled
         if not hasattr(self, 'has_charts') or not self.has_charts:
             return
         
-        # Add a new data point every 5 seconds
-        # Calculate focus percentage over the last interval
-        focus_percent = 100 # Default to 100% if we don't have enough data yet
+        # Get current time in seconds from start
+        current_time = len(self.time_points)
+        self.time_points.append(current_time)
+        
+        # Add a new data point - use 1 for focused, 0 for not focused
+        is_focused = 1 if hasattr(self, 'focus_data') and self.focus_data.get("focused", False) else 0
         
         # Add the point to the series
-        minutes_elapsed = len(self.chart_data_points) / 12 # 12 points per minute (5-second intervals)
-        
-        if len(self.chart_data_points) >= 360: # Keep 30 minutes of data (360 points)
+        if len(self.chart_data_points) >= 360:  # Keep about 30 minutes of data
             self.chart_data_points.pop(0)
+            self.time_points.pop(0)
         
-        # Only add a data point if we have valid focus data
-        if hasattr(self, 'focus_time'):
-            self.chart_data_points.append(focus_percent)
+        self.chart_data_points.append(is_focused)
         
         # Clear the series and repopulate with all data points
         self.focus_series.clear()
         
         for i, point in enumerate(self.chart_data_points):
-            minute = i / 12 # Convert to minutes
-            self.focus_series.append(minute, point)
+            time_val = self.time_points[i]
+            self.focus_series.append(time_val, point)
         
-        # Adjust X axis range to show only the last 30 minutes of data
-        max_minutes = min(30, len(self.chart_data_points) / 12)
-        self.axis_x.setRange(0, max_minutes)
-        #  poopy stinky git
+        # Update X axis range to show the last 30 minutes of data or less
+        max_time = max(30, current_time) if current_time > 0 else 30
+        self.axis_x.setRange(max(0, current_time - 30), max_time)
+        
+        # Y axis is fixed to show 0 and 1
+        self.axis_y.setRange(-0.1, 1.1)  # Add padding for better visibility
