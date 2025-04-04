@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QTableWidget, QTableWidgetItem, 
-                             QHeaderView, QSplitter, QFrame)
+                             QHeaderView, QSplitter, QFrame, QComboBox)
 from PyQt5.QtGui import QFont, QPainter
 from PyQt5.QtCore import Qt, QDateTime, pyqtSignal
 from datetime import datetime, timedelta
@@ -30,6 +30,7 @@ class HistoryWidget(QWidget):
         self.has_charts = HAS_CHARTS
         self.metrics_frame = None # Will be set in initUI
         self.chart_frame = None # Will be set in initUI
+        self.original_height = None  # To store original height before expansion
         
         self.initUI()
         self.refresh_sessions()
@@ -255,46 +256,53 @@ class HistoryWidget(QWidget):
             longest_focus_str = f"{int(longest_focus_mins)}m {int(longest_focus_secs)}s"
             self.sessions_table.setItem(i, 5, QTableWidgetItem(longest_focus_str))
             
-            # View buttons
+            # Action dropdown
+            session_id = session['id']  # Get the session ID
+            
             view_widget = QWidget()
             view_layout = QVBoxLayout(view_widget)
             view_layout.setContentsMargins(2, 2, 2, 2)
-            view_layout.setSpacing(4)
-            
-            session_id = session['id']  # Get the session ID
-            
-            view_btn = QPushButton("View Focus Data")
-            view_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0078D7;
-                color: white;
-                border-radius: 3px;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #0063B1;
-            }
+
+            action_combo = QComboBox()
+            action_combo.addItem("View Graphs")
+            action_combo.addItem("View Focus Data")
+            action_combo.addItem("View Eye Movement")
+            action_combo.setStyleSheet("""
+                QComboBox {
+                    background-color: #0078D7;
+                    color: white;
+                    padding: 4px;
+                    min-height: 25px;
+                    border-radius: 3px;
+                }
+                QComboBox::drop-down {
+                    border: none;
+                }
+                QComboBox QAbstractItemView {
+                    background-color: #2D2D30;
+                    color: white;
+                    selection-background-color: #007ACC;
+                }
             """)
-            view_btn.clicked.connect(lambda checked, sid=session_id: self.load_session_details(sid))
-            
-            eye_analysis_btn = QPushButton("View Eye Movement Analysis")
-            eye_analysis_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #7E57C2;
-                color: white;
-                border-radius: 3px;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #5E35B1;
-            }
-            """)
-            eye_analysis_btn.clicked.connect(lambda checked, sid=session_id: self.show_eye_analysis(sid))
-            
-            view_layout.addWidget(view_btn)
-            view_layout.addWidget(eye_analysis_btn)
-            
+
+            # Store the session ID for use in the handler
+            action_combo.setProperty("session_id", session_id)
+            action_combo.currentIndexChanged.connect(self.handle_action_selection)
+            view_layout.addWidget(action_combo)
+
             self.sessions_table.setCellWidget(i, 6, view_widget)
+    
+    def handle_action_selection(self, index):
+        """Handle action selection from the combo box"""
+        # Get the combo box that sent the signal
+        combo = self.sender()
+        if combo and index > 0:  # Skip the "Select Action..." item
+            session_id = combo.property("session_id")
+            if index == 1:  # View Focus Data
+                self.load_session_details(session_id)
+            elif index == 2:  # View Eye Movement
+                self.show_eye_analysis(session_id)
+            combo.setCurrentIndex(0)  # Reset to "Select Action..."
     
     def on_session_selected(self, row, column):
         """Handle when a session row is clicked"""
@@ -407,6 +415,11 @@ class HistoryWidget(QWidget):
         """Show eye movement analysis for a session"""
         print(f"DEBUG: Showing eye analysis for session {session_id}")
         
+        # Save original height before expanding
+        if self.original_height is None:
+            self.original_height = self.window().height()
+            print(f"DEBUG: Saved original height: {self.original_height}")
+        
         session = self.db_manager.get_session_details(session_id)
         if not session:
             print(f"ERROR: Failed to get session details for ID {session_id}")
@@ -455,8 +468,9 @@ class HistoryWidget(QWidget):
         self.chart_frame.setVisible(False)
         self.eye_movement_container.setVisible(True)
         
-        # Force size update for container and widget
-        self.eye_movement_widget.setMinimumHeight(400)
+        # Force size update for container and widget with increased height
+        self.eye_movement_widget.setMinimumHeight(500)  # Increased from 400 to 500
+        self.eye_movement_container.setMinimumHeight(600)  # Ensure container is also tall enough
         self.eye_movement_container.adjustSize()
         self.adjustSize()
         
@@ -476,6 +490,14 @@ class HistoryWidget(QWidget):
         self.eye_movement_container.setVisible(False)
         self.metrics_frame.setVisible(True)
         self.chart_frame.setVisible(True)
+        
+        # Restore original size if we expanded for eye movement analysis
+        if self.original_height is not None:
+            print(f"DEBUG: Restoring original height: {self.original_height}")
+            main_window = self.window()
+            current_size = main_window.size()
+            main_window.resize(current_size.width(), self.original_height)
+            self.original_height = None  # Reset for next time
         
         # Update title back to session details
         if self.current_session_id:

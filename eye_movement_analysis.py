@@ -18,7 +18,7 @@ def debug_print(*args, **kwargs):
         print("[EyeMovementAnalysis]", *args, **kwargs)
 
 class MatplotlibCanvas(FigureCanvasQTAgg):
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
+    def __init__(self, parent=None, width=5, height=6, dpi=100):
         debug_print("Initializing MatplotlibCanvas")
         fig = Figure(figsize=(width, height), dpi=dpi)
         self.axes = fig.add_subplot(111)
@@ -74,16 +74,13 @@ class EyeMovementAnalysisWidget(QWidget):
             self.plot_type_combo.currentIndexChanged.connect(self.update_plot)
             selection_layout.addWidget(self.plot_type_combo)
             
-            # Debug button
-            debug_btn = QPushButton("Debug Info")
-            debug_btn.clicked.connect(self.debug_info)
-            selection_layout.addWidget(debug_btn)
+            
             
             layout.addLayout(selection_layout)
             
             # Matplotlib canvas for plotting
             debug_print("Creating MatplotlibCanvas")
-            self.canvas = MatplotlibCanvas(self, width=5, height=4, dpi=100)
+            self.canvas = MatplotlibCanvas(self, width=5, height=6, dpi=100)
             layout.addWidget(self.canvas)
             
             # Status message
