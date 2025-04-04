@@ -3,3 +3,5 @@ __pycache__/
 *.pyo
 *.pyd
 .DS_Store
+*.db
+eye_movement_debug_*.json

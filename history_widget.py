@@ -4,6 +4,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtGui import QFont, QPainter
 from PyQt5.QtCore import Qt, QDateTime, pyqtSignal
 from datetime import datetime, timedelta
+import sys
+import traceback
 
 # Try to import QtChart module
 try:
@@ -13,6 +15,11 @@ except ImportError:
     HAS_CHARTS = False
     print("QtChart module not available. Charts will be disabled in History view.")
 
+# Import the eye movement analysis widget directly
+# Comment out the hardcoded path
+# sys.path.append("Users/haabdelrehim/desktop/seperated_project/eye_movement_analysis.py")
+from eye_movement_analysis import EyeMovementAnalysisWidget, debug_print
+
 class HistoryWidget(QWidget):
     """Widget for displaying session history and detailed session analysis"""
     
@@ -21,6 +28,8 @@ class HistoryWidget(QWidget):
         self.db_manager = db_manager
         self.current_session_id = None
         self.has_charts = HAS_CHARTS
+        self.metrics_frame = None # Will be set in initUI
+        self.chart_frame = None # Will be set in initUI
         
         self.initUI()
         self.refresh_sessions()
@@ -84,11 +93,11 @@ class HistoryWidget(QWidget):
         data_chart_layout = QHBoxLayout()
         
         # Session metrics
-        metrics_frame = QFrame()
-        metrics_frame.setFrameShape(QFrame.StyledPanel)
-        metrics_frame.setStyleSheet("background-color: #3E3E42; border-radius: 5px;")
+        self.metrics_frame = QFrame()
+        self.metrics_frame.setFrameShape(QFrame.StyledPanel)
+        self.metrics_frame.setStyleSheet("background-color: #3E3E42; border-radius: 5px;")
         
-        metrics_layout = QVBoxLayout(metrics_frame)
+        metrics_layout = QVBoxLayout(self.metrics_frame)
         
         # Session metrics labels
         self.date_label = QLabel("Date: -")
@@ -109,11 +118,11 @@ class HistoryWidget(QWidget):
         metrics_layout.addStretch()
         
         # Focus chart
-        chart_frame = QFrame()
-        chart_frame.setFrameShape(QFrame.StyledPanel)
-        chart_frame.setStyleSheet("background-color: #3E3E42; border-radius: 5px;")
+        self.chart_frame = QFrame()
+        self.chart_frame.setFrameShape(QFrame.StyledPanel)
+        self.chart_frame.setStyleSheet("background-color: #3E3E42; border-radius: 5px;")
         
-        chart_layout = QVBoxLayout(chart_frame)
+        chart_layout = QVBoxLayout(self.chart_frame)
         chart_layout.addWidget(QLabel("Focus Timeline:"))
         
         if self.has_charts:
@@ -136,10 +145,48 @@ class HistoryWidget(QWidget):
             chart_layout.addWidget(chart_placeholder)
         
         # Add metrics and chart to horizontal layout
-        data_chart_layout.addWidget(metrics_frame, 1)
-        data_chart_layout.addWidget(chart_frame, 3)
+        data_chart_layout.addWidget(self.metrics_frame, 1)
+        data_chart_layout.addWidget(self.chart_frame, 3)
         
         details_layout.addLayout(data_chart_layout)
+        
+        # Eye movement analysis container
+        self.eye_movement_container = QWidget()
+        self.eye_movement_container.setVisible(False)  # Initially hidden
+        eye_movement_layout = QVBoxLayout(self.eye_movement_container)
+        
+        # Add status label for debugging
+        self.eye_movement_status = QLabel("Eye Movement Analysis Status: Not loaded")
+        eye_movement_layout.addWidget(self.eye_movement_status)
+        
+        # Create eye movement widget
+        try:
+            self.eye_movement_widget = EyeMovementAnalysisWidget()
+            eye_movement_layout.addWidget(self.eye_movement_widget)
+            print("Successfully created EyeMovementAnalysisWidget")
+        except Exception as e:
+            print(f"Error creating EyeMovementAnalysisWidget: {e}")
+            traceback.print_exc()
+            err_label = QLabel(f"Error loading eye movement analysis: {str(e)}")
+            err_label.setStyleSheet("color: red;")
+            eye_movement_layout.addWidget(err_label)
+        
+        # Back button to return to focus data
+        back_btn = QPushButton("Back to Focus Data")
+        back_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #0078D7;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+        }
+        QPushButton:hover {
+            background-color: #0063B1;
+        }
+        """)
+        back_btn.clicked.connect(self.show_focus_data)
+        eye_movement_layout.addWidget(back_btn)
+        details_layout.addWidget(self.eye_movement_container)
         
         # Add widgets to splitter and set initial sizes
         splitter.addWidget(self.sessions_table)
@@ -151,16 +198,16 @@ class HistoryWidget(QWidget):
         # Refresh button
         refresh_button = QPushButton("Refresh Sessions")
         refresh_button.setStyleSheet("""
-            QPushButton {
-                background-color: #007ACC;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #005999;
-            }
+        QPushButton {
+            background-color: #007ACC;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+        }
+        QPushButton:hover {
+            background-color: #005999;
+        }
         """)
         refresh_button.clicked.connect(self.refresh_sessions)
         
@@ -208,26 +255,46 @@ class HistoryWidget(QWidget):
             longest_focus_str = f"{int(longest_focus_mins)}m {int(longest_focus_secs)}s"
             self.sessions_table.setItem(i, 5, QTableWidgetItem(longest_focus_str))
             
-            # View details button
-            view_button = QPushButton("View")
-            view_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #007ACC;
-                    color: white;
-                    border: none;
-                    border-radius: 3px;
-                    padding: 3px 8px;
-                }
-                QPushButton:hover {
-                    background-color: #005999;
-                }
+            # View buttons
+            view_widget = QWidget()
+            view_layout = QVBoxLayout(view_widget)
+            view_layout.setContentsMargins(2, 2, 2, 2)
+            view_layout.setSpacing(4)
+            
+            session_id = session['id']  # Get the session ID
+            
+            view_btn = QPushButton("View Focus Data")
+            view_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0078D7;
+                color: white;
+                border-radius: 3px;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background-color: #0063B1;
+            }
             """)
+            view_btn.clicked.connect(lambda checked, sid=session_id: self.load_session_details(sid))
             
-            # Connect button to load session details with this session's ID
-            session_id = session['id']
-            view_button.clicked.connect(lambda checked, sid=session_id: self.load_session_details(sid))
+            eye_analysis_btn = QPushButton("View Eye Movement Analysis")
+            eye_analysis_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #7E57C2;
+                color: white;
+                border-radius: 3px;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background-color: #5E35B1;
+            }
+            """)
+            eye_analysis_btn.clicked.connect(lambda checked, sid=session_id: self.show_eye_analysis(sid))
             
-            self.sessions_table.setCellWidget(i, 6, view_button)
+            view_layout.addWidget(view_btn)
+            view_layout.addWidget(eye_analysis_btn)
+            
+            self.sessions_table.setCellWidget(i, 6, view_widget)
     
     def on_session_selected(self, row, column):
         """Handle when a session row is clicked"""
@@ -277,9 +344,15 @@ class HistoryWidget(QWidget):
         # Update chart if available
         if self.has_charts and 'focus_points' in session and session['focus_points']:
             self.update_chart(session)
+        
+        # Make sure we're showing focus data, not eye movement analysis
+        self.show_focus_data()
+        
+        # Check if there's eye movement data and directly show it for debugging
+        # Uncomment this for automatic switching to eye movement analysis
+        # if 'eye_movement_data' in session and session['eye_movement_data']:
+        #     self.show_eye_analysis(session_id)
     
-    # Replace the update_chart method in history_widget.py with this improved version:
-
     def update_chart(self, session):
         """Update the focus timeline chart with session data"""
         # Completely clear the existing chart
@@ -329,3 +402,90 @@ class HistoryWidget(QWidget):
         
         # Update chart title
         self.chart.setTitle(f"Focus Timeline - {session['start_time'].strftime('%Y-%m-%d %H:%M')}")
+    
+    def show_eye_analysis(self, session_id):
+        """Show eye movement analysis for a session"""
+        print(f"DEBUG: Showing eye analysis for session {session_id}")
+        
+        session = self.db_manager.get_session_details(session_id)
+        if not session:
+            print(f"ERROR: Failed to get session details for ID {session_id}")
+            return
+        
+        self.current_session_id = session_id
+        
+        # Update session details header
+        self.details_title.setText(f"Eye Movement Analysis - {session['start_time'].strftime('%Y-%m-%d %H:%M')}")
+        
+        # Check if eye movement data exists
+        has_eye_data = False
+        if 'eye_movement_data' in session and session['eye_movement_data']:
+            has_eye_data = True
+            self.eye_movement_status.setText(f"Eye Movement Data: Present - {len(session['eye_movement_data'].get('gaze_ratio_changes', []))} gaze changes, {len(session['eye_movement_data'].get('fixation_durations', []))} fixations")
+            
+            try:
+                # Set the eye movement data for analysis
+                print(f"DEBUG: Setting eye movement data on widget, type: {type(session['eye_movement_data'])}")
+                self.eye_movement_widget.set_data(session['eye_movement_data'])
+                print("DEBUG: Successfully set eye movement data on widget")
+            except Exception as e:
+                print(f"ERROR: Failed to set eye movement data: {e}")
+                traceback.print_exc()
+                self.eye_movement_status.setText(f"Error setting data: {str(e)}")
+        else:
+            print("DEBUG: No eye movement data in session")
+            self.eye_movement_status.setText("Eye Movement Data: None available")
+            
+            # No eye movement data, show message
+            try:
+                self.eye_movement_widget.canvas.axes.clear()
+                self.eye_movement_widget.canvas.axes.text(0.5, 0.5, "No eye movement data available for this session",
+                                                  horizontalalignment='center',
+                                                  verticalalignment='center',
+                                                  transform=self.eye_movement_widget.canvas.axes.transAxes,
+                                                  color='white',
+                                                  fontsize=14)
+                self.eye_movement_widget.canvas.draw()
+            except Exception as e:
+                print(f"ERROR: Failed to update canvas with message: {e}")
+                traceback.print_exc()
+        
+        # Hide regular focus data, show eye movement analysis
+        self.metrics_frame.setVisible(False)
+        self.chart_frame.setVisible(False)
+        self.eye_movement_container.setVisible(True)
+        
+        # Force size update for container and widget
+        self.eye_movement_widget.setMinimumHeight(400)
+        self.eye_movement_container.adjustSize()
+        self.adjustSize()
+        
+        # Debug visibility state
+        print(f"DEBUG: Visibility of containers: eye_movement={self.eye_movement_container.isVisible()}, "
+              f"metrics={self.metrics_frame.isVisible()}, chart={self.chart_frame.isVisible()}")
+        
+        # Force update to ensure widget is displayed
+        self.eye_movement_container.repaint()
+        self.repaint()
+    
+    def show_focus_data(self):
+        """Switch back to the focus data view"""
+        print("DEBUG: Switching back to focus data view")
+        
+        # Hide eye movement analysis, show regular focus data
+        self.eye_movement_container.setVisible(False)
+        self.metrics_frame.setVisible(True)
+        self.chart_frame.setVisible(True)
+        
+        # Update title back to session details
+        if self.current_session_id:
+            session = self.db_manager.get_session_details(self.current_session_id)
+            if session:
+                self.details_title.setText(f"Session Details - {session['start_time'].strftime('%Y-%m-%d %H:%M')}")
+        
+        # Debug visibility state
+        print(f"DEBUG: Visibility after switching: eye_movement={self.eye_movement_container.isVisible()}, "
+              f"metrics={self.metrics_frame.isVisible()}, chart={self.chart_frame.isVisible()}")
+        
+        # Force update
+        self.repaint()

@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 from datetime import datetime
+import traceback
 
 class DatabaseManager:
     def __init__(self, db_path='focus_sessions.db'):
@@ -45,13 +46,22 @@ class DatabaseManager:
             )
             ''')
             
+            # Create eye_movement_data table
+            self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS eye_movement_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                gaze_ratio_changes TEXT NOT NULL,
+                fixation_durations TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
+            )
+            ''')
+            
             self.conn.commit()
             print("Database initialized successfully")
         except sqlite3.Error as e:
             print(f"Database initialization error: {e}")
     
-    # Replace the save_session method in database_manager.py with this improved version
-
     def save_session(self, session_data):
         """
         Save a completed session to the database
@@ -68,25 +78,7 @@ class DatabaseManager:
             end_time = session_data['end_time'].isoformat()
             
             # Convert focus_data to JSON string - handle potential serialization issues
-            try:
-                import json
-                focus_data_json = json.dumps(session_data['focus_data'])
-                print(f"Successfully serialized focus_data: {len(focus_data_json)} characters")
-            except Exception as e:
-                print(f"Error serializing focus_data: {e}")
-                # Create a simplified version of focus_data
-                simplified_data = []
-                for item in session_data['focus_data']:
-                    # Convert non-serializable objects to strings
-                    simplified_item = {}
-                    for k, v in item.items():
-                        if k == 'timestamp':
-                            simplified_item[k] = v.isoformat()
-                        else:
-                            simplified_item[k] = v
-                    simplified_data.append(simplified_item)
-                focus_data_json = json.dumps(simplified_data)
-                print(f"Used simplified focus_data: {len(focus_data_json)} characters")
+            focus_data_json = self._serialize_data(session_data['focus_data'], 'focus_data')
             
             # Print values for debugging
             print(f"Saving session with values:")
@@ -129,44 +121,58 @@ class DatabaseManager:
             session_id = self.cursor.lastrowid
             print(f"Inserted session with ID: {session_id}")
             
-            # Insert focus points - do this in smaller batches to avoid transaction issues
-            focus_points = session_data['focus_points']
-            print(f"Inserting {len(focus_points)} focus points")
-            
-            BATCH_SIZE = 50
-            total_points = len(focus_points)
-            
-            for i in range(0, total_points, BATCH_SIZE):
-                batch = focus_points[i:i+BATCH_SIZE]
-                print(f"Processing batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}: {len(batch)} points")
+            # Process focus points and eye movement data in a single transaction
+            try:
+                # Insert focus points - do this in smaller batches to avoid transaction issues
+                focus_points = session_data['focus_points']
+                print(f"Inserting {len(focus_points)} focus points")
                 
-                for point in batch:
-                    timestamp = point['timestamp'].isoformat()
-                    is_focused = 1 if point['is_focused'] else 0
+                BATCH_SIZE = 50
+                total_points = len(focus_points)
+                
+                for i in range(0, total_points, BATCH_SIZE):
+                    batch = focus_points[i:i+BATCH_SIZE]
+                    print(f"Processing batch {i//BATCH_SIZE + 1}/{(total_points + BATCH_SIZE - 1)//BATCH_SIZE}: {len(batch)} points")
                     
-                    try:
-                        self.cursor.execute('''
-                        INSERT INTO focus_points (
-                            session_id, timestamp, is_focused, gaze_direction
-                        ) VALUES (?, ?, ?, ?)
-                        ''', (
-                            session_id, timestamp, is_focused, point['gaze_direction']
-                        ))
-                    except Exception as e:
-                        print(f"Error inserting focus point: {e}")
-                        print(f"Point data: timestamp={timestamp}, is_focused={is_focused}, direction={point['gaze_direction']}")
+                    for point in batch:
+                        timestamp = point['timestamp'].isoformat()
+                        is_focused = 1 if point['is_focused'] else 0
+                        
+                        try:
+                            self.cursor.execute('''
+                            INSERT INTO focus_points (
+                                session_id, timestamp, is_focused, gaze_direction
+                            ) VALUES (?, ?, ?, ?)
+                            ''', (
+                                session_id, timestamp, is_focused, point['gaze_direction']
+                            ))
+                        except Exception as e:
+                            print(f"Error inserting focus point: {e}")
+                            print(f"Point data: timestamp={timestamp}, is_focused={is_focused}, direction={point['gaze_direction']}")
+                    
+                    # Commit each batch to avoid large transactions
+                    self.conn.commit()
+                    print(f"Committed batch {i//BATCH_SIZE + 1}")
                 
-                # Commit each batch to avoid large transactions
+                # Save eye movement data if available
+                if 'eye_movement_data' in session_data and session_data['eye_movement_data']:
+                    self._save_eye_movement_data(session_id, session_data['eye_movement_data'])
+                else:
+                    print("No eye movement data found in session_data")
+                
+                # Final commit
                 self.conn.commit()
-                print(f"Committed batch {i//BATCH_SIZE + 1}")
-            
-            # Final commit
-            self.conn.commit()
-            print(f"Session saved successfully with ID: {session_id}")
-            return session_id
+                print(f"Session saved successfully with ID: {session_id}")
+                return session_id
+                
+            except Exception as e:
+                print(f"Error saving focus points or eye movement data: {e}")
+                traceback.print_exc()
+                self.conn.rollback()
+                # Continue with returning session_id even if points failed to save
+                return session_id
         
         except Exception as e:
-            import traceback
             print(f"Error saving session: {e}")
             traceback.print_exc()
             try:
@@ -174,6 +180,70 @@ class DatabaseManager:
             except:
                 pass
             return None
+
+    def _serialize_data(self, data, data_name):
+        """Helper function to serialize data to JSON with proper error handling"""
+        try:
+            json_data = json.dumps(data)
+            print(f"Successfully serialized {data_name}: {len(json_data)} characters")
+            return json_data
+        except Exception as e:
+            print(f"Error serializing {data_name}: {e}")
+            # Create a simplified version for serialization
+            simplified_data = []
+            for item in data:
+                # Convert non-serializable objects to strings
+                simplified_item = {}
+                for k, v in item.items():
+                    if isinstance(v, datetime):
+                        simplified_item[k] = v.isoformat()
+                    else:
+                        simplified_item[k] = v
+                simplified_data.append(simplified_item)
+            json_data = json.dumps(simplified_data)
+            print(f"Used simplified {data_name}: {len(json_data)} characters")
+            return json_data
+
+    def _save_eye_movement_data(self, session_id, eye_movement_data):
+        """Helper function to save eye movement data with proper error handling"""
+        try:
+            # Verify the structure of eye_movement_data
+            if not isinstance(eye_movement_data, dict):
+                print(f"Warning: eye_movement_data is not a dictionary, got {type(eye_movement_data)}")
+                return False
+            
+            # Check for required keys
+            required_keys = ['gaze_ratio_changes', 'fixation_durations']
+            for key in required_keys:
+                if key not in eye_movement_data:
+                    print(f"Warning: Missing required key '{key}' in eye_movement_data")
+                    return False
+            
+            # Serialize the data
+            gaze_ratio_changes = json.dumps(eye_movement_data['gaze_ratio_changes'])
+            fixation_durations = json.dumps(eye_movement_data['fixation_durations'])
+            
+            print(f"Saving eye movement data:")
+            print(f"  - Gaze ratio changes: {len(eye_movement_data['gaze_ratio_changes'])} entries, {len(gaze_ratio_changes)} chars")
+            print(f"  - Fixation durations: {len(eye_movement_data['fixation_durations'])} entries, {len(fixation_durations)} chars")
+            
+            # Insert the data
+            self.cursor.execute('''
+            INSERT INTO eye_movement_data (
+                session_id, gaze_ratio_changes, fixation_durations
+            ) VALUES (?, ?, ?)
+            ''', (
+                session_id, gaze_ratio_changes, fixation_durations
+            ))
+            
+            self.conn.commit()
+            print(f"Saved eye movement data for session {session_id}")
+            return True
+            
+        except Exception as e:
+            print(f"Error saving eye movement data: {e}")
+            traceback.print_exc()
+            return False
     
     def get_all_sessions(self):
         """Get all sessions from the database, ordered by start time descending"""
@@ -248,12 +318,70 @@ class DatabaseManager:
                 })
             
             session['focus_points'] = focus_points
+            
+            # Get eye movement data if available
+            try:
+                self.cursor.execute('''
+                SELECT gaze_ratio_changes, fixation_durations
+                FROM eye_movement_data
+                WHERE session_id = ?
+                ''', (session_id,))
+                
+                eye_data = self.cursor.fetchone()
+                if eye_data:
+                    session['eye_movement_data'] = {
+                        'gaze_ratio_changes': json.loads(eye_data[0]),
+                        'fixation_durations': json.loads(eye_data[1])
+                    }
+                    print(f"Retrieved eye movement data for session {session_id}")
+                else:
+                    print(f"No eye movement data found for session {session_id}")
+            except sqlite3.Error as e:
+                print(f"Error retrieving eye movement data: {e}")
+            
             return session
         
         except sqlite3.Error as e:
             print(f"Error retrieving session details: {e}")
             return None
     
+    def check_eye_movement_data(self, session_id):
+        """Check if eye movement data exists for a given session"""
+        try:
+            self.cursor.execute('''
+            SELECT COUNT(*) FROM eye_movement_data WHERE session_id = ?
+            ''', (session_id,))
+            
+            count = self.cursor.fetchone()[0]
+            
+            if count > 0:
+                # Get the data to inspect it
+                self.cursor.execute('''
+                SELECT gaze_ratio_changes, fixation_durations
+                FROM eye_movement_data
+                WHERE session_id = ?
+                ''', (session_id,))
+                
+                data = self.cursor.fetchone()
+                gaze_changes = json.loads(data[0])
+                fixations = json.loads(data[1])
+                
+                print(f"=== Eye Movement Data for Session {session_id} ===")
+                print(f"Gaze changes: {len(gaze_changes)} entries")
+                print(f"Fixations: {len(fixations)} entries")
+                print(f"Sample gaze changes: {gaze_changes[:5]}")
+                print(f"Sample fixations: {fixations[:5]}")
+                print("=== End of Eye Movement Data ===")
+                
+                return True
+            else:
+                print(f"No eye movement data found for session {session_id}")
+                return False
+            
+        except sqlite3.Error as e:
+            print(f"Error checking eye movement data: {e}")
+            return False
+        
     def close(self):
         """Close the database connection"""
         if self.conn:

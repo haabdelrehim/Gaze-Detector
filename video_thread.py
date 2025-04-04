@@ -14,6 +14,16 @@ class VideoThread(QThread):
         self.running = True
         self.paused = False
         self.tracking = False
+        # Eye movement dynamics tracking
+        self.gaze_ratio_changes = []     # Store changes in gaze ratio (for saccades)
+        self.fixation_durations = []     # Store durations of fixations
+        self.last_gaze_ratio = None      # Previous gaze ratio for comparison
+        self.fixation_start_time = None  # When current fixation started
+        self.in_fixation = False         # Currently in fixation state
+        self.gaze_change_threshold = 0.8 # Threshold to detect a saccade
+        self.min_fixation_duration = 0.3  # Minimum time in seconds to count as fixation
+        self.saccade_confirmation_count = 0  # Counter for consecutive frames with significant change
+        self.saccade_confirmation_threshold = 2  # Number of frames needed to confirm a saccade
         
         # Initialize eye tracking components
         self.detector = dlib.get_frontal_face_detector()
@@ -208,6 +218,7 @@ class VideoThread(QThread):
                     
                     avg_gaze_ratio = sum(self.gaze_ratio_history)/len(self.gaze_ratio_history)
                     
+                    
                     # Determine gaze direction and focus state
                     if avg_gaze_ratio < 0.45:
                         gaze_direction = "RIGHT"
@@ -220,6 +231,22 @@ class VideoThread(QThread):
                         gaze_direction = "LEFT"
                         is_looking_at_screen = False
                         cv2.putText(frame, "LEFT", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                self.track_gaze_changes(avg_gaze_ratio)
+                if not is_blinking:
+                    # Show detected eye movements on the frame
+                    # Display counts in top-right corner
+                    saccade_text = f"Saccades: {len(self.gaze_ratio_changes)}"
+                    fixation_text = f"Fixations: {len(self.fixation_durations)}"
+                    cv2.putText(frame, saccade_text, (frame.shape[1] - 200, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    cv2.putText(frame, fixation_text, (frame.shape[1] - 200, 90),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    
+                    # Display a visual indicator when a saccade is detected
+                    if self.saccade_confirmation_count > 0:
+                        indicator_size = min(30, self.saccade_confirmation_count * 10)
+                        cv2.circle(frame, (frame.shape[1] - 50, 120), 
+                                indicator_size, (0, 165, 255), -1)
                 
                 # Update focus tracking data
                 self.update_focus_data(is_looking_at_screen, is_blinking, gaze_direction)
@@ -268,6 +295,7 @@ class VideoThread(QThread):
             "distraction_count": 0,
             "avg_distraction_time": 0
         }
+        self.reset_eye_movement_data()
         self.tracking = False
         self.is_focused = True
         self.focus_start_time = QDateTime.currentDateTime()
@@ -279,3 +307,63 @@ class VideoThread(QThread):
     def stop(self):
         self.running = False
         self.wait()
+    def track_gaze_changes(self, gaze_ratio):
+        """Track changes in gaze ratio to detect saccades and fixations"""
+        if not self.tracking:
+            return
+        
+        current_time = QDateTime.currentDateTime()
+        
+        # Initialize data on first call
+        if self.last_gaze_ratio is None:
+            self.last_gaze_ratio = gaze_ratio
+            self.fixation_start_time = current_time
+            self.in_fixation = True
+            return
+        
+        # Calculate change in gaze ratio
+        ratio_change = abs(gaze_ratio - self.last_gaze_ratio)
+        
+        # Detect potential saccade (significant gaze change)
+        if ratio_change > self.gaze_change_threshold:
+            self.saccade_confirmation_count += 1
+            
+            # Only register a saccade if we have enough consecutive frames with significant change
+            if self.saccade_confirmation_count >= self.saccade_confirmation_threshold:
+                # Record the gaze ratio change as a saccade
+                self.gaze_ratio_changes.append(ratio_change)
+                
+                # If we were in a fixation, record its duration if it meets minimum duration
+                if self.in_fixation:
+                    fixation_duration = self.fixation_start_time.secsTo(current_time)
+                    if fixation_duration >= self.min_fixation_duration:
+                        self.fixation_durations.append(fixation_duration)
+                    
+                # Start a new fixation
+                self.fixation_start_time = current_time
+                self.in_fixation = True
+                
+                # Reset confirmation counter
+                self.saccade_confirmation_count = 0
+        else:
+            # Reset confirmation counter for stability
+            self.saccade_confirmation_count = 0
+        
+        # Update last gaze ratio
+        self.last_gaze_ratio = gaze_ratio
+
+    def get_eye_movement_data(self):
+        """Return the collected eye movement data"""
+        return {
+            'gaze_ratio_changes': self.gaze_ratio_changes.copy(),
+            'fixation_durations': self.fixation_durations.copy()
+        }
+
+    def reset_eye_movement_data(self):
+        """Reset all eye movement data"""
+        self.gaze_ratio_changes = []
+        self.fixation_durations = []
+        self.last_gaze_ratio = None
+        self.fixation_start_time = None
+        self.in_fixation = False
+        self.saccade_confirmation_count = 0 

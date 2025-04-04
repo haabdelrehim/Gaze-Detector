@@ -6,6 +6,8 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget,
 from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import Qt, QDateTime, QTimer
 from datetime import datetime
+import traceback
+import json  # Added for debug dumps
 
 from video_thread import VideoThread
 from focus_metrics_widget import FocusMetricsWidget
@@ -42,6 +44,18 @@ class FocusTrackerApp(QMainWindow):
         self.data_collection_timer = QTimer()
         self.data_collection_timer.timeout.connect(self.collect_session_data)
         self.data_collection_timer.setInterval(5000)  # Every 5 seconds
+        
+        # Debug eye movement data collection timer
+        self.debug_timer = QTimer()
+        self.debug_timer.timeout.connect(self.check_eye_movement_data)
+        self.debug_timer.setInterval(30000)  # Every 30 seconds
+        self.debug_timer.start()
+    
+    def check_eye_movement_data(self):
+        """Debug function to periodically check eye movement data collection"""
+        if self.session_active and hasattr(self.video_thread, 'get_eye_movement_data'):
+            eye_data = self.video_thread.get_eye_movement_data()
+            print(f"DEBUG: Current eye movement data - Gaze changes: {len(eye_data['gaze_ratio_changes'])}, Fixations: {len(eye_data['fixation_durations'])}")
     
     def initUI(self):
         """Initialize the user interface"""
@@ -181,18 +195,7 @@ class FocusTrackerApp(QMainWindow):
         
         self.setCentralWidget(central_widget)
         
-        # Connect tab change signal
-        self.right_panel.currentChanged.connect(self.on_tab_changed)
-
-        # Connect advice button
-        self.advice_widget.generate_button.clicked.connect(self.generate_advice)
-
-        # Add panels to main layout
-        self.main_layout.addWidget(self.left_panel, 2)
-        self.main_layout.addWidget(self.right_panel, 1)
-        self.setCentralWidget(central_widget)
-
-        # First ensure there are no existing connections
+        # Ensure there are no existing connections
         print("Checking existing button connections")
         try:
             self.start_button.clicked.disconnect()
@@ -222,16 +225,9 @@ class FocusTrackerApp(QMainWindow):
         print(f"Start button has {self.start_button.receivers(self.start_button.clicked)} connections")
         print(f"Pause button has {self.pause_button.receivers(self.pause_button.clicked)} connections")
         print(f"Reset button has {self.reset_button.receivers(self.reset_button.clicked)} connections")
-
-        # Debug output to check for multiple connections
-        print(f"Button connections established:")
-        print(f"  - Start button has {self.start_button.receivers(self.start_button.clicked)} connections")
-        print(f"  - Pause button has {self.pause_button.receivers(self.pause_button.clicked)} connections")
-        print(f"  - End button has {self.reset_button.receivers(self.reset_button.clicked)} connections")
         
         # Focus data
         self.focus_data = {}
-    
     
     def update_image(self, cv_img):
         """Updates the image_label with a new OpenCV image"""
@@ -298,6 +294,7 @@ class FocusTrackerApp(QMainWindow):
             'is_focused': self.focus_data["focused"],
             'direction': self.focus_data["direction"]
         })
+        
     def on_tab_changed(self, index):
         """Handle tab changes to optimize layout"""
         tab_name = self.right_panel.tabText(index)
@@ -322,6 +319,7 @@ class FocusTrackerApp(QMainWindow):
         
         # Force layout update
         self.adjustSize()
+        
     def start_session(self):
         """Start or resume the focus tracking session"""
         if not self.session_active:
@@ -338,6 +336,11 @@ class FocusTrackerApp(QMainWindow):
             
             # Start data collection timer
             self.data_collection_timer.start()
+            
+            # Reset eye movement tracking data
+            if hasattr(self.video_thread, 'reset_eye_movement_data'):
+                self.video_thread.reset_eye_movement_data()
+                print("Reset eye movement tracking data")
             
             # Update UI
             self.start_button.setText("Resume")
@@ -377,11 +380,9 @@ class FocusTrackerApp(QMainWindow):
             self.start_button.setEnabled(True)
             self.pause_button.setEnabled(False)
 
-    
     def end_session(self):
         """End the current session and save to database"""
         # Print call stack to see what's calling this method
-        import traceback
         print("\n========== END SESSION CALL STACK ==========")
         traceback.print_stack()
         print("============================================\n")
@@ -430,7 +431,7 @@ class FocusTrackerApp(QMainWindow):
                 # Keep first, middle, and last points for a representative sample
                 first_third = self.session_focus_points[:MAX_FOCUS_POINTS//3]
                 middle_third = self.session_focus_points[len(self.session_focus_points)//2 - MAX_FOCUS_POINTS//6:
-                                                        len(self.session_focus_points)//2 + MAX_FOCUS_POINTS//6]
+                                                         len(self.session_focus_points)//2 + MAX_FOCUS_POINTS//6]
                 last_third = self.session_focus_points[-MAX_FOCUS_POINTS//3:]
                 self.session_focus_points = first_third + middle_third + last_third
 
@@ -440,9 +441,41 @@ class FocusTrackerApp(QMainWindow):
                 # Same approach - keep beginning, middle, and end
                 first_third = self.focus_data_snapshots[:MAX_SNAPSHOTS//3]
                 middle_third = self.focus_data_snapshots[len(self.focus_data_snapshots)//2 - MAX_SNAPSHOTS//6:
-                                                        len(self.focus_data_snapshots)//2 + MAX_SNAPSHOTS//6]
+                                                         len(self.focus_data_snapshots)//2 + MAX_SNAPSHOTS//6]
                 last_third = self.focus_data_snapshots[-MAX_SNAPSHOTS//3:]
                 self.focus_data_snapshots = first_third + middle_third + last_third
+            
+            # Get eye movement data with improved validation
+            eye_movement_data = None
+            if hasattr(self.video_thread, 'get_eye_movement_data'):
+                eye_movement_data = self.video_thread.get_eye_movement_data()
+                
+                # Validate the eye movement data
+                if not isinstance(eye_movement_data, dict):
+                    print(f"Warning: get_eye_movement_data returned {type(eye_movement_data)}, expected dict")
+                    eye_movement_data = {'gaze_ratio_changes': [], 'fixation_durations': []}
+                
+                # Ensure the required keys exist
+                for key in ['gaze_ratio_changes', 'fixation_durations']:
+                    if key not in eye_movement_data:
+                        print(f"Warning: Missing key '{key}' in eye_movement_data")
+                        eye_movement_data[key] = []
+                
+                # Validate types of the data
+                if not isinstance(eye_movement_data['gaze_ratio_changes'], list):
+                    print(f"Warning: gaze_ratio_changes is not a list, got {type(eye_movement_data['gaze_ratio_changes'])}")
+                    eye_movement_data['gaze_ratio_changes'] = []
+                
+                if not isinstance(eye_movement_data['fixation_durations'], list):
+                    print(f"Warning: fixation_durations is not a list, got {type(eye_movement_data['fixation_durations'])}")
+                    eye_movement_data['fixation_durations'] = []
+                
+                print(f"Retrieved eye movement data: {len(eye_movement_data['gaze_ratio_changes'])} gaze changes, "
+                      f"{len(eye_movement_data['fixation_durations'])} fixations")
+                
+            else:
+                print("Warning: video_thread does not have get_eye_movement_data method")
+                eye_movement_data = {'gaze_ratio_changes': [], 'fixation_durations': []}
             
             # Prepare session data for database
             session_data = {
@@ -457,12 +490,28 @@ class FocusTrackerApp(QMainWindow):
                 'focus_points': self.session_focus_points
             }
             
+            # Only add eye movement data if it has content
+            if eye_movement_data and (len(eye_movement_data['gaze_ratio_changes']) > 0 or 
+                                      len(eye_movement_data['fixation_durations']) > 0):
+                session_data['eye_movement_data'] = eye_movement_data
+                print(f"Eye movement data being sent to database:")
+                print(f"- Gaze ratio changes: {len(eye_movement_data['gaze_ratio_changes'])} entries")
+                print(f"- Fixation durations: {len(eye_movement_data['fixation_durations'])} entries")
+            else:
+                print("No eye movement data to save (empty or not available)")
+            
             # Save session to database
             print("Attempting to save session to database...")
             session_id = self.db_manager.save_session(session_data)
             
             if session_id:
                 print(f"Successfully saved session with ID: {session_id}")
+                
+                # Verify eye movement data was saved
+                if 'eye_movement_data' in session_data and session_data['eye_movement_data']:
+                    print("Verifying eye movement data was saved...")
+                    self.db_manager.check_eye_movement_data(session_id)
+                
                 QMessageBox.information(
                     self, 
                     "Session Completed", 
@@ -489,7 +538,6 @@ class FocusTrackerApp(QMainWindow):
                     "There was an error saving the session to history. Check console for details."
                 )
         except Exception as e:
-            import traceback
             print(f"Exception during session saving: {e}")
             traceback.print_exc()
             QMessageBox.critical(
@@ -497,10 +545,6 @@ class FocusTrackerApp(QMainWindow):
                 "Error Saving Session", 
                 f"An exception occurred: {str(e)}\nSee console for details."
             )
-            print("<<< EXITING: end_session (normal completion)")
-        except Exception as e:
-            print("<<< EXITING: end_session (with exception)")
-            raise
         finally:
             # Reset the flag when done, regardless of success or failure
             print("Session saving process completed, resetting flag")
@@ -536,6 +580,7 @@ class FocusTrackerApp(QMainWindow):
         
         # Clean up resources
         print("Cleaning up resources")
+        self.debug_timer.stop()  # Stop the debug timer
         self.video_thread.stop()
         if hasattr(self.advice_widget, 'api_thread'):
             self.advice_widget.api_thread.stop()
